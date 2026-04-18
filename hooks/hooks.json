@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "sessionStart": [
+      {"command": "python3 ./scripts/log-event.py"}
+    ],
+    "stop": [
+      {"command": "python3 ./scripts/log-event.py"}
+    ],
+    "subagentStop": [
+      {"command": "python3 ./scripts/log-event.py"}
+    ],
+    "sessionEnd": [
+      {"command": "python3 ./scripts/log-event.py"}
+    ]
+  }
+}

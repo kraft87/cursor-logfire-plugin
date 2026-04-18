@@ -1,0 +1,9 @@
+{
+  "name": "logfire-session-capture",
+  "version": "0.1.0",
+  "description": "Capture Cursor session traces and send to Pydantic Logfire for observability",
+  "author": {
+    "name": "Kyle Doucette"
+  },
+  "keywords": ["logfire", "observability", "tracing", "opentelemetry"]
+}
