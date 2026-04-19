@@ -595,13 +595,10 @@ def handle_session_end(inp, state_file, lock_file, trace_id, ts_nano, transcript
 def main():
     global _hook_event, _session_id, _diag_log
 
-    enable_local_log = os.environ.get("LOGFIRE_LOCAL_LOG", "false") in ("true", "1")
-    enable_diagnostics = os.environ.get("LOGFIRE_DIAGNOSTICS", "false") in ("true", "1")
-
-    if enable_diagnostics or enable_local_log:
-        log_dir = Path.home() / ".cursor" / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        _diag_log = str(log_dir / "logfire-diagnostics.jsonl")
+    # Always log diagnostics until we've verified the transcript format
+    log_dir = Path.home() / ".cursor" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    _diag_log = str(log_dir / "logfire-diagnostics.jsonl")
 
     raw_input = sys.stdin.read()
     try:
@@ -611,25 +608,42 @@ def main():
         return
 
     _hook_event = inp.get("hook_event_name", "unknown")
-    _session_id = inp.get("session_id", "unknown")
+    _session_id = inp.get("session_id", inp.get("conversation_id", "unknown"))
+
+    # Log the full hook input for format discovery
+    log_diag("info", "Hook input received", json.dumps(inp, default=str)[:2000])
+
+    # Dump transcript file contents for format discovery
+    transcript_path = inp.get("transcript_path", "")
+    if transcript_path and os.path.isfile(transcript_path):
+        try:
+            with open(transcript_path) as f:
+                sample = f.read(2000)
+            log_diag("info", "Transcript sample", sample)
+        except OSError as e:
+            log_diag("warn", "Could not read transcript", str(e))
+    else:
+        log_diag("info", "No transcript file", f"path={transcript_path!r}")
 
     if _hook_event not in OTLP_EVENTS:
+        log_diag("info", "Skipping non-OTLP event", _hook_event)
         return
 
     logfire_token = os.environ.get("LOGFIRE_TOKEN", "")
     if not logfire_token:
+        log_diag("warn", "No LOGFIRE_TOKEN set, skipping export")
         return
 
     base_url = os.environ.get("LOGFIRE_BASE_URL", "https://logfire-us.pydantic.dev").rstrip("/")
     otlp_endpoint = f"{base_url}/v1/traces"
 
-    session_id = inp.get("session_id", "")
+    session_id = inp.get("session_id", inp.get("conversation_id", ""))
     if not session_id:
+        log_diag("warn", "No session_id or conversation_id")
         return
 
     trace_id = trace_id_from_session(session_id)
     ts_nano = now_nano()
-    transcript_path = inp.get("transcript_path", "")
 
     tmpdir = os.environ.get("TMPDIR") or os.environ.get("TEMP") or tempfile.gettempdir()
     state_file = os.path.join(tmpdir, f"cursor-logfire-{session_id}.json")
