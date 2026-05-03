@@ -1,16 +1,25 @@
 {
+  "version": 1,
   "hooks": {
     "sessionStart": [
-      {"command": "python3 ./scripts/log-event.py"}
+      {
+        "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/log-event.py\""
+      }
     ],
     "stop": [
-      {"command": "python3 ./scripts/log-event.py"}
+      {
+        "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/log-event.py\""
+      }
     ],
     "subagentStop": [
-      {"command": "python3 ./scripts/log-event.py"}
+      {
+        "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/log-event.py\""
+      }
     ],
     "sessionEnd": [
-      {"command": "python3 ./scripts/log-event.py"}
+      {
+        "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/log-event.py\""
+      }
     ]
   }
 }

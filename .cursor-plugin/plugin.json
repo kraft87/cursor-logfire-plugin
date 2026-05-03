@@ -5,5 +5,11 @@
   "author": {
     "name": "Kyle Doucette"
   },
-  "keywords": ["logfire", "observability", "tracing", "opentelemetry"]
+  "keywords": [
+    "logfire",
+    "observability",
+    "tracing",
+    "opentelemetry"
+  ],
+  "hooks": "./hooks/hooks.json"
 }
