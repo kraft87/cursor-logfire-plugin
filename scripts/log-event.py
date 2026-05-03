@@ -88,6 +88,41 @@ def get_logfire_setting(name: str, default: str = "") -> str:
     return _read_config_file().get(config_key, default)
 
 
+def get_workspace_root(inp: dict, fallback: str = "") -> str:
+    """Resolve the workspace root from the hook payload.
+
+    Cursor sends ``workspace_roots`` (list); some Claude Code hooks send
+    ``cwd`` instead. Prefer ``cwd`` when present, fall back to the first
+    ``workspace_roots`` entry, and finally fall back to ``fallback`` (the
+    value cached in plugin state for mid-session lazy init).
+    """
+    cwd = inp.get("cwd", "")
+    if cwd:
+        return cwd
+    roots = inp.get("workspace_roots") or []
+    if roots and roots[0]:
+        return roots[0]
+    return fallback
+
+
+def resolve_project(workspace_root: str) -> str:
+    """Derive a project slug from a workspace root path.
+
+    Normalises Windows backslashes and Cursor's ``/C:/...`` URI-style paths
+    to forward slashes, strips trailing separators, and returns the basename.
+    Examples:
+        /C:/Users/x/projects/CompromisedAccount -> CompromisedAccount
+        C:\\Users\\x\\projects\\Foo              -> Foo
+        /home/kyle/services/synapse              -> synapse
+    """
+    if not workspace_root:
+        return ""
+    cleaned = workspace_root.replace("\\", "/").rstrip("/")
+    if "/" not in cleaned:
+        return cleaned
+    return cleaned.rsplit("/", 1)[-1]
+
+
 OTLP_EVENTS = {
     "SessionStart",
     "sessionStart",
@@ -581,15 +616,15 @@ def handle_session_start(
     if not acquire_lock(lock_file):
         return
     try:
-        cwd = inp.get("cwd", "") or (
-            inp.get("workspace_roots", [""])[0] if inp.get("workspace_roots") else ""
-        )
+        cwd = get_workspace_root(inp)
+        project = resolve_project(cwd)
         model = inp.get("model", "")
         try:
             os.unlink(state_file)
         except OSError:
             pass
         state = _init_default_state(ts_nano, transcript_path or "", cwd, model)
+        state["project"] = project
         root_span_id = state["root_span_id"]
         write_state(state_file, state)
         attrs = [
@@ -604,6 +639,8 @@ def handle_session_start(
             attrs.append(make_attr("gen_ai.response.model", model))
         if cwd:
             attrs.append(make_attr("session.cwd", cwd))
+        if project:
+            attrs.append(make_attr("session.project", project))
         span = build_span(
             trace_id,
             random_span_id(),
@@ -678,11 +715,7 @@ def handle_stop(
     try:
         state = read_state(state_file)
         if not state:
-            cwd = inp.get("cwd", "") or (
-                inp.get("workspace_roots", [""])[0]
-                if inp.get("workspace_roots")
-                else ""
-            )
+            cwd = get_workspace_root(inp)
             state = _init_default_state(
                 ts_nano,
                 transcript_path or "",
@@ -690,6 +723,7 @@ def handle_stop(
                 inp.get("model", ""),
                 skip_existing_transcript=False,
             )
+            state["project"] = resolve_project(cwd)
             log_diag(
                 "info",
                 "stop fired without prior sessionStart state - lazily "
@@ -699,6 +733,14 @@ def handle_stop(
             )
             write_state(state_file, state)
         root_span_id = state["root_span_id"]
+        # Workspace root + project slug for per-chat-span tagging.
+        # Prefer the live hook payload (workspace can change mid-session),
+        # fall back to whatever was cached at sessionStart.
+        cwd = get_workspace_root(inp, fallback=state.get("cwd", ""))
+        project = (
+            resolve_project(cwd) if cwd != state.get("cwd", "")
+            else state.get("project", "") or resolve_project(cwd)
+        )
 
         call_model = inp.get("model") or state.get("model", "")
         raw_input_tokens = inp.get("input_tokens", 0) or 0
@@ -777,6 +819,10 @@ def handle_stop(
             attrs.append(make_attr("hook.event", hook_event))
         if tool_names:
             attrs.append(make_complex_attr("cursor.tools_used", tool_names))
+        if cwd:
+            attrs.append(make_attr("session.cwd", cwd))
+        if project:
+            attrs.append(make_attr("session.project", project))
 
         json_schema: dict = {
             "type": "object",
@@ -824,6 +870,10 @@ def handle_stop(
             state["model"] = call_model
         if effective_tp:
             state["transcript_path"] = effective_tp
+        if cwd and not state.get("cwd"):
+            state["cwd"] = cwd
+        if project and not state.get("project"):
+            state["project"] = project
         state["last_line"] = new_total
         if new_msgs:
             state["all_messages"] = state.get("all_messages", []) + new_msgs
@@ -845,9 +895,7 @@ def handle_session_end(
 ):
     state = read_state(state_file)
     if not state:
-        cwd = inp.get("cwd", "") or (
-            inp.get("workspace_roots", [""])[0] if inp.get("workspace_roots") else ""
-        )
+        cwd = get_workspace_root(inp)
         state = _init_default_state(
             ts_nano,
             transcript_path or "",
@@ -855,6 +903,7 @@ def handle_session_end(
             inp.get("model", ""),
             skip_existing_transcript=False,
         )
+        state["project"] = resolve_project(cwd)
         log_diag(
             "info",
             "sessionEnd fired without prior state - lazily initialising "
@@ -867,6 +916,7 @@ def handle_session_end(
         root_span_id = state["root_span_id"]
         start_time = state.get("start_time", str(ts_nano))
         cwd = state.get("cwd", "")
+        project = state.get("project", "") or resolve_project(cwd)
         model = state.get("model", "")
 
         # Final transcript parse to catch any remaining messages.
@@ -932,6 +982,8 @@ def handle_session_end(
             attrs.append(make_attr("gen_ai.response.model", model))
         if cwd:
             attrs.append(make_attr("session.cwd", cwd))
+        if project:
+            attrs.append(make_attr("session.project", project))
         if duration_ms:
             attrs.append(make_int_attr("session.duration_ms", duration_ms))
         if agg_tools:
